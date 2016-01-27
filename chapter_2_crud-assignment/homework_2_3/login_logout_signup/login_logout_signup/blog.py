@@ -24,7 +24,7 @@ import userDAO
 import bottle
 import cgi
 import re
-
+import blogPostDAO
 
 
 __author__ = 'aje'
@@ -48,11 +48,134 @@ def blog_index():
 	username = sessions.get_username(cookie)
 
 	# todo: this is not yet implemented at this point in the course
+	
+	# even if there is no logged in user, we can show the blog
+	l = posts.get_posts(10)
 
-	return bottle.template('blog_template', dict(username=username))
+	#return bottle.template('blog_template', dict(username=username))
+	return bottle.template('blog_template', dict(myposts=l, username=username))
 
 
 
+# Displays a particular blog post
+@bottle.get("/post/<permalink>")
+def show_post(permalink="notfound"):
+
+	print("\n Under Route: /post/<permalink> and subroutine: show_post, Method:get")
+	cookie = bottle.request.get_cookie("session")
+
+	username = sessions.get_username(cookie)
+	permalink = cgi.escape(permalink)
+
+	print ("about to query on permalink = ", permalink)
+	post = posts.get_post_by_permalink(permalink)
+
+	if post is None:
+		bottle.redirect("/post_not_found")
+
+	# init comment form fields for additional comment
+	comment = {'name': "", 'body': "", 'email': ""}
+
+	return bottle.template("entry_template", dict(post=post, username=username, errors="", comment=comment))
+
+
+
+# used to process a comment on a blog post
+@bottle.post('/newcomment')
+def post_new_comment():
+
+	print("\n Under Route: /newcomment and subroutine: post_new_comment, Method:post")
+	name = bottle.request.forms.get("commentName")
+	email = bottle.request.forms.get("commentEmail")
+	body = bottle.request.forms.get("commentBody")
+	permalink = bottle.request.forms.get("permalink")
+
+	post = posts.get_post_by_permalink(permalink)
+	cookie = bottle.request.get_cookie("session")
+
+	username = sessions.get_username(cookie)
+
+	# if post not found, redirect to post not found error
+	if post is None:
+		bottle.redirect("/post_not_found")
+		return
+
+	# if values not good, redirect to view with errors
+
+	if name == "" or body == "":
+		# user did not fill in enough information
+
+		# init comment for web form
+		comment = {'name': name, 'email': email, 'body': body}
+
+		errors = "Post must contain your name and an actual comment."
+		return bottle.template("entry_template", dict(post=post, username=username, errors=errors, comment=comment))
+
+	else:
+
+		# it all looks good, insert the comment into the blog post and redirect back to the post viewer
+		posts.add_comment(permalink, name, email, body)
+
+		bottle.redirect("/post/" + permalink)
+
+
+@bottle.get("/post_not_found")
+def post_not_found():
+	return "Sorry, post not found"
+
+
+# Displays the form allowing a user to add a new post. Only works for logged in users
+@bottle.get('/newpost')
+def get_newpost():
+	print("\n Under Route: /newpost and subroutine: get_newpost, Method:get")
+	cookie = bottle.request.get_cookie("session")
+	username = sessions.get_username(cookie)  # see if user is logged in
+	if username is None:
+		bottle.redirect("/login")
+
+	return bottle.template("newpost_template", dict(subject="", body = "", errors="", tags="", username=username))
+
+#
+# Post handler for setting up a new post.
+# Only works for logged in user.
+@bottle.post('/newpost')
+def post_newpost():
+	print("\n Under Route: /newpost and subroutine: post_newpost, Method:post")
+	title = bottle.request.forms.get("subject")
+	post = bottle.request.forms.get("body")
+	tags = bottle.request.forms.get("tags")
+
+	cookie = bottle.request.get_cookie("session")
+	username = sessions.get_username(cookie)  # see if user is logged in
+	if username is None:
+		bottle.redirect("/login")
+
+	if title == "" or post == "":
+		errors = "Post must contain a title and blog entry"
+		return bottle.template("newpost_template", dict(subject=cgi.escape(title, quote=True), username=username,
+														body=cgi.escape(post, quote=True), tags=tags, errors=errors))
+
+	# extract tags
+	tags = cgi.escape(tags)
+	tags_array = extract_tags(tags)
+
+	# looks like a good entry, insert it escaped
+	escaped_post = cgi.escape(post, quote=True)
+
+	# substitute some <p> for the paragraph breaks
+	newline = re.compile('\r?\n')
+	formatted_post = newline.sub("<p>", escaped_post)
+
+	permalink = posts.insert_entry(title, formatted_post, tags_array, username)
+
+	# now bottle.redirect to the blog permalink
+	bottle.redirect("/post/" + permalink)
+
+
+
+
+####this below is homework of week2
+	
 # displays the initial blog signup form
 @bottle.get('/signup')
 def present_signup():
@@ -177,6 +300,27 @@ def present_welcome():
 
 # Helper Functions
 
+
+#extracts the tag from the tags form element. an experience python programmer could do this in	fewer lines, no doubt
+def extract_tags(tags):
+
+	print("\n Under Route: Helper, method invocation and subroutine: extract_tags ")
+	whitespace = re.compile('\s')
+
+	nowhite = whitespace.sub("",tags)
+	tags_array = nowhite.split(',')
+
+	# let's clean it up
+	cleaned = []
+	for tag in tags_array:
+		if tag not in cleaned and tag != "":
+			cleaned.append(tag)
+
+	return cleaned
+
+
+
+
 # validates that the user information is valid for new signup, return True of False
 # and fills in the error string if there is an issue
 def validate_signup(username, password, verify, email, errors):
@@ -210,6 +354,7 @@ connection_string = "mongodb://localhost"
 connection = pymongo.MongoClient(connection_string)
 database = connection.blog
 
+posts = blogPostDAO.BlogPostDAO(database)
 users = userDAO.UserDAO(database)
 sessions = sessionDAO.SessionDAO(database)
 
